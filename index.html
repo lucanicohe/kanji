@@ -199,14 +199,16 @@ font:inherit;cursor:pointer;display:flex;flex-direction:column;align-items:cente
 // 5) DESIGN RULE: do not invent design changes (colours, backgrounds, layout) that were not asked for;
 //    change only what the user asked and keep everything else as it was.
 // 6) LEARNING FLOW (user's rules, keep them when changing the app):
-//    Stages per word (marks[k] -> st(k)): -3 red + full hiragana, -2 red + one hiragana, -1 red, 0 black,
-//    1 hiragana mode, 2 spelling mode, 3 spelling-syllable mode, then blue deep learning later.
-//    - NEW-WORD GATE: a new word is unlocked ONLY when every already unlocked word has stage >= 2
-//      (no red/hints any more, black mode answered Easy, hiragana mode answered Easy). See allLearned()/tryUnlock().
-//      Words are unlocked one at a time in list order, so new words always go at the END of the lists.
-//    - Difficult words come more and more: diff[k] +1 on Forgot (-0.5 on Easy) multiplies the pick weight,
-//      and Forgot also raises weights[]; words pressed Easy again and again come less and less: easies[k]
-//      (consecutive Easy) divides the weight and lengthens the sit-out time (hold). Both are saved in XKEY (df, ez).
+//    Stages per word (marks[k] -> st(k)): -2 red + help (hook line), -1 red without help, 0 black,
+//    1 hiragana mode, 2 spelling mode. Easy = one stage up, Forgot = one stage down (red stays at -2).
+//    - Only ACTIVE (4) words are learned at the same time (working memory holds about 4 chunks, Cowan 2001).
+//      act[] is that set. A new word comes in ONLY when a word passes spelling mode (Easy at stage 2) and leaves
+//      act. New words are taken in list order but skip ones that look/sound like a word already in act (fillActive()).
+//    - A finished word is not shown for a long while: it only comes back as a blue deep learning card
+//      (at most one every DLGAP = 30 cards; due 30 / 90 / 200 / 400 cards after the last time).
+//      Forgot in deep learning: back to spelling mode and into act again.
+//    - Difficult words come more often (diff[k]); words pressed Easy again and again come less (easies[k]).
+//    - Words may contain kana (済んでいる) or be one kanji (腹): HL then needs one entry per character, "0 100 0 0" for kana.
 //
 // =====================================================================================
 const WORDS = [
@@ -251,7 +253,21 @@ const WORDS = [
   {k:"習慣", r:"しゅうかん", m:"habit", ex:"早起きの習慣をつけたい。\nI want to get into the habit of waking up early."},
   {k:"交換", r:"こうかん", m:"exchange", ex:"古いスマホを新しいものと交換した。\nI exchanged my old phone for a new one."},
   {k:"努力", r:"どりょく", m:"effort", ex:"努力すれば、夢は叶う。\nIf you make an effort, dreams come true."},
-  {k:"保証", r:"ほしょう", m:"guarantee", ex:"この商品は一年間保証されている。\nThis product is guaranteed for one year."}
+  {k:"保証", r:"ほしょう", m:"guarantee", ex:"この商品は一年間保証されている。\nThis product is guaranteed for one year."},
+  {k:"済んでいる", r:"すんでいる", m:"be finished", ex:"宿題はもう済んでいる。\nThe homework is already done."},
+  {k:"物価", r:"ぶっか", m:"prices", ex:"東京は物価が高い。\nPrices are high in Tokyo."},
+  {k:"貧しくて", r:"まずしくて", m:"poor", ex:"家が貧しくて、大学に行けなかった。\nMy family was poor, so I couldn't go to university."},
+  {k:"腹", r:"はら", m:"belly", ex:"腹が痛い。\nMy belly hurts."},
+  {k:"許可", r:"きょか", m:"permission", ex:"先生の許可をもらった。\nI got the teacher's permission."},
+  {k:"支出", r:"ししゅつ", m:"expenses", ex:"今月は支出が多かった。\nMy expenses were high this month."},
+  {k:"与えられる", r:"あたえられる", m:"be given", ex:"全員に同じ機会が与えられる。\nEveryone is given the same chance."},
+  {k:"巨大", r:"きょだい", m:"huge", ex:"巨大な地震が起きた。\nA huge earthquake happened."},
+  {k:"吸収", r:"きゅうしゅう", m:"absorb", ex:"スポンジが水を吸収する。\nA sponge absorbs water."},
+  {k:"強盗", r:"ごうとう", m:"robber", ex:"銀行に強盗が入った。\nA robber broke into the bank."},
+  {k:"技師", r:"ぎし", m:"engineer", ex:"父は電気技師だ。\nMy father is an electrical engineer."},
+  {k:"誤解", r:"ごかい", m:"misunderstanding", ex:"それは誤解です。\nThat is a misunderstanding."},
+  {k:"布", r:"ぬの", m:"cloth", ex:"布で机をふく。\nI wipe the desk with a cloth."},
+  {k:"綿", r:"わた", m:"cotton", ex:"綿のシャツを買った。\nI bought a cotton shirt."}
 ];
 // HL: per character [top right bottom left] insets (%) of the red part -- full rules in the comment block above WORDS
 const HL = [
@@ -295,27 +311,41 @@ const HL = [
   ["0 0 46 0","0 70 0 0"],
   ["0 0 0 0","0 65 0 0"],
   ["0 0 0 52","0 0 0 0"],
-  ["0 65 0 0","0 55 0 0"]
+  ["0 65 0 0","0 55 0 0"],
+  ["0 72 0 0","0 100 0 0","0 100 0 0","0 100 0 0","0 100 0 0"],
+  ["0 60 0 0","0 60 0 0"],
+  ["0 0 0 0","0 100 0 0","0 100 0 0","0 100 0 0"],
+  ["0 63 0 0"],
+  ["0 52 0 0","30 38 36 0"],
+  ["46 0 0 0","50 0 0 0"],
+  ["0 0 0 0","0 100 0 0","0 100 0 0","0 100 0 0","0 100 0 0"],
+  ["0 0 0 0","0 0 0 0"],
+  ["0 62 0 0","0 0 0 50"],
+  ["0 52 0 0","61 0 0 0"],
+  ["0 62 0 0","44 0 0 42"],
+  ["0 55 0 0","0 0 54 55"],
+  ["50 0 0 0"],
+  ["0 58 0 0"]
 ];
 const KEY = "kanjiMemoryWeights.v2", OLDKEY = "kanjiMemoryWeights.v1", MKEY = "kanjiMemoryMarks.v2";
 let marks = {};
 try { marks = JSON.parse(localStorage.getItem(MKEY)) || {}; } catch (e) {}
 let weights = WORDS.map(() => 3);
 try { let s = JSON.parse(localStorage.getItem(KEY)); if (!s) { s = JSON.parse(localStorage.getItem(OLDKEY)); if (Array.isArray(s) && s.length > 11) s.splice(11, 1); } if (Array.isArray(s)) weights = WORDS.map((_, i) => typeof s[i] === 'number' ? s[i] : 3); } catch (e) {}
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(weights)); localStorage.setItem(MKEY, JSON.stringify(marks)); localStorage.setItem(XKEY, JSON.stringify({v: 4, unlocked, dl: dlData, sp: spDone, lp: lapses, reviewed, tally, hd: hold, sk: strk, df: diff, ez: easies})); } catch (e) {} };
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(weights)); localStorage.setItem(MKEY, JSON.stringify(marks)); localStorage.setItem(XKEY, JSON.stringify({v: 4, unlocked, dl: dlData, sp: spDone, lp: lapses, reviewed, tally, hd: hold, sk: strk, df: diff, ez: easies, ac: act})); } catch (e) {} };
 try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
 
 let vlv = null; // deep learning card: which normal level it looks like (null = the word's own level)
 const lvl = k => vlv !== null ? vlv : st(k);
 /* red-word hook: one short line, shapes you know; tap it to write your own (saved) */
 const HKEY='kanjiMemoryHooks.v1';let custom={};try{custom=JSON.parse(localStorage.getItem(HKEY))||{}}catch(e){}
-const HK=["Knife and axe in HAND: one cut and it's DONE", "JOE CRIES: his dog fell in the water", "KAY CAN follow any thread of road: her horse has done them all", "KAI CUTS the knot with a knife, and the water flows free", "HEY YOU! A shadow and a sound reach you", "A CUCKOO carves NINE words in stone, so you're sure", "He TOOK A SET of knives on the road: every cut fits", "EASY: keep one hand on the thread and it lasts", "BO's SHOE hits a wall and can't go any further", "SIGH, SAY \"once more!\" and the box comes alive", "MEOW, GEE: all the sprouts under one roof share a name", "KAI stays ZEN: a stick turns the bad sheep good", "HI, COOK! Two people race carts: who is better?", "A strong arm piles more earth onto the ZOO CAR", "TAY holds out a branch to ANN", "HYO's CAR: a person says what it's worth", "All eyes pour onto the kid CHEWING MOCHI", "KAY GOES to the window and always leans toward it", "JITSU fan GEN: under his roof, his eyes see the dream come true", "KENTO weighs his words on a wooden scale", "At the THAI SHOW, a hand points at the elephant", "In KAI's SHACK, a knife opens it and a ruler explains the parts", "HAH, A COOK holds it tight in both hands", "KO and KEN give their money, even the dog, to help", "A hand drags a heavy FUTON stuffed with money", "FEW QUEUE for the sun: its light reaches everyone anyway", "A CAT TOOK it with a quick hand", "DEW, YO! The woman begs the sky for rain", "A flying TACO! Both hands go out in front to stop it", "HE'S ON me: the child clings and can't stand alone", "CAN REE run the village? Yes, through its bamboo pipes", "JOE tells KEN: you get the ox only if you plant a tree", "Words scratched into a metal KEY and a ROCK so they stay", "SHE ROWS home with money and rice: all the stuff she needs", "A hand waves you in: dress for the SHOW, wear a TIE", "Words fly around the trees: who SAW the CHOW dog?", "Step forward in fine clothes, HAPPY to show everyone", "Wings flap daily, her heart's used to it: SHOE kicks CAN", "Crossing paths, a hand swaps a COKE CAN for yours", "A DOE shoves a heavy ROCK with all her strength", "At the HOE SHOW, a person stands behind his words"];
+const HK=["Knife and axe in HAND: one cut and it's DONE", "JOE CRIES: his dog fell in the water", "KAY CAN follow any thread of road: her horse has done them all", "KAI CUTS the knot with a knife, and the water flows free", "HEY YOU! A shadow and a sound reach you", "A CUCKOO carves NINE words in stone, so you're sure", "He TOOK A SET of knives on the road: every cut fits", "EASY: keep one hand on the thread and it lasts", "BO's SHOE hits a wall and can't go any further", "SIGH, SAY \"once more!\" and the box comes alive", "MEOW, GEE: all the sprouts under one roof share a name", "KAI stays ZEN: a stick turns the bad sheep good", "HI, COOK! Two people race carts: who is better?", "A strong arm piles more earth onto the ZOO CAR", "TAY holds out a branch to ANN", "HYO's CAR: a person says what it's worth", "All eyes pour onto the kid CHEWING MOCHI", "KAY GOES to the window and always leans toward it", "JITSU fan GEN: under his roof, his eyes see the dream come true", "KENTO weighs his words on a wooden scale", "At the THAI SHOW, a hand points at the elephant", "In KAI's SHACK, a knife opens it and a ruler explains the parts", "HAH, A COOK holds it tight in both hands", "KO and KEN give their money, even the dog, to help", "A hand drags a heavy FUTON stuffed with money", "FEW QUEUE for the sun: its light reaches everyone anyway", "A CAT TOOK it with a quick hand", "DEW, YO! The woman begs the sky for rain", "A flying TACO! Both hands go out in front to stop it", "HE'S ON me: the child clings and can't stand alone", "CAN REE run the village? Yes, through its bamboo pipes", "JOE tells KEN: you get the ox only if you plant a tree", "Words scratched into a metal KEY and a ROCK so they stay", "SHE ROWS home with money and rice: all the stuff she needs", "A hand waves you in: dress for the SHOW, wear a TIE", "Words fly around the trees: who SAW the CHOW dog?", "Step forward in fine clothes, HAPPY to show everyone", "Wings flap daily, her heart's used to it: SHOE kicks CAN", "Crossing paths, a hand swaps a COKE CAN for yours", "A DOE shoves a heavy ROCK with all her strength", "At the HOE SHOW, a person stands behind his words", "water crossed", "cow trader", "split money", "meat box", "words mouth", "hand pot", "arm tray", "box arms", "mouth hand", "bow dish", "hand flag", "words knife", "hanging flag", "twisted thread"];
 function hk(i){return custom[WORDS[i].k]||HK[i]}
 function paintCue(on){const k=$("kanji");k.querySelectorAll(".kw").forEach(w=>{const n=w.querySelector(".kwi");while(n.firstChild)k.insertBefore(n.firstChild,w);w.remove()});
   if(!on||!k.firstChild)return;const w=document.createElement("span"),i=document.createElement("span"),c=document.createElement("span");
   w.className="kw";i.className="kwi";c.className="cue";c.textContent=hk(cur);
   while(k.firstChild)i.appendChild(k.firstChild);w.append(c,i);k.appendChild(w)}
-const SENT=["状況|じょうきょう|situation を 見|み|see て *判断 する。", "今|いま|now の *状況 を 教えて|おしえて|tell ください。", "日本|にほん|Japan で 働いた|はたらいた|worked *経験 が ある。", "問題|もんだい|problem が *解決 した。", "天気|てんき|weather の *影響 で 電車|でんしゃ|train が 遅れた|おくれた|was_late 。", "予定|よてい|schedule を *確認 します。", "*適切 な 対応|たいおう|response を お願い|おねがい|request します。", "健康|けんこう|health を *維持 する。", "事故|じこ|accident を *防止 する。", "動画|どうが|video を *再生 する。／ *再生 回数|かいすう|number_of_times が 多い|おおい|many 。", "*苗字 は 田中|たなか|Tanaka です。", "サービス を *改善 する。", "二つ|ふたつ|two の 商品|しょうひん|product を *比較 する。", "人口|じんこう|population が *増加 している。", "新しい|あたらしい|new 方法|ほうほう|method を *提案 する。", "先生|せんせい|teacher に 高く|たかく|highly *評価 された。", "その 発表|はっぴょう|presentation は *注目 を 集めた|あつめた|gathered 。", "最近|さいきん|recently 、 本|ほん|book を 読まない|よまない|do_not_read *傾向 が ある。", "夢|ゆめ|dream が *実現 した。", "計画|けいかく|plan を *検討 する。", "調査|ちょうさ|survey の *対象 は 学生|がくせい|student です。", "この 文|ぶん|sentence は 二通り|ふたとおり|two_ways に *解釈 できる。", "状況|じょうきょう|situation を 正確|せいかく|accurate に *把握 する。", "チーム の 勝利|しょうり|victory に *貢献 した。", "費用|ひよう|cost の *負担 が 大きい|おおきい|big 。", "スマホ が 急速|きゅうそく|rapidly に *普及 した。", "新しい|あたらしい|new 顧客|こきゃく|customer を *獲得 する。", "夏|なつ|summer は 冷たい|つめたい|cold 飲み物|のみもの|drink の *需要 が 増える|ふえる|rises 。", "変化|へんか|change に *抵抗 する 人|ひと|people も いる。", "スマホ に *依存 しすぎている。", "データ を 安全|あんぜん|safe に *管理 する。", "*条件 に 合う|あう|fit 人|ひと|person を 探|さが|look_for している。", "毎日|まいにち|every_day の 勉強|べんきょう|study 時間|じかん|time を *記録 している。", "会議|かいぎ|meeting の *資料 を 準備|じゅんび|prepare する。", "友達|ともだち|friend を 誕生日|たんじょうび|birthday パーティー に *招待 した。", "事故|じこ|accident の 原因|げんいん|cause を *調査 している。", "研究|けんきゅう|research の 結果|けっか|result を *発表 する。", "早起き|はやおき|waking_early の *習慣 を つけたい。", "古い|ふるい|old スマホ を 新しい|あたらしい|new もの と *交換 した。", "*努力 すれば 夢|ゆめ|dream は 叶う|かなう|come_true 。", "この 商品|しょうひん|product は 一年間|いちねんかん|one_year *保証 されている。"];
+const SENT=["状況|じょうきょう|situation を 見|み|see て *判断 する。", "今|いま|now の *状況 を 教えて|おしえて|tell ください。", "日本|にほん|Japan で 働いた|はたらいた|worked *経験 が ある。", "問題|もんだい|problem が *解決 した。", "天気|てんき|weather の *影響 で 電車|でんしゃ|train が 遅れた|おくれた|was_late 。", "予定|よてい|schedule を *確認 します。", "*適切 な 対応|たいおう|response を お願い|おねがい|request します。", "健康|けんこう|health を *維持 する。", "事故|じこ|accident を *防止 する。", "動画|どうが|video を *再生 する。／ *再生 回数|かいすう|number_of_times が 多い|おおい|many 。", "*苗字 は 田中|たなか|Tanaka です。", "サービス を *改善 する。", "二つ|ふたつ|two の 商品|しょうひん|product を *比較 する。", "人口|じんこう|population が *増加 している。", "新しい|あたらしい|new 方法|ほうほう|method を *提案 する。", "先生|せんせい|teacher に 高く|たかく|highly *評価 された。", "その 発表|はっぴょう|presentation は *注目 を 集めた|あつめた|gathered 。", "最近|さいきん|recently 、 本|ほん|book を 読まない|よまない|do_not_read *傾向 が ある。", "夢|ゆめ|dream が *実現 した。", "計画|けいかく|plan を *検討 する。", "調査|ちょうさ|survey の *対象 は 学生|がくせい|student です。", "この 文|ぶん|sentence は 二通り|ふたとおり|two_ways に *解釈 できる。", "状況|じょうきょう|situation を 正確|せいかく|accurate に *把握 する。", "チーム の 勝利|しょうり|victory に *貢献 した。", "費用|ひよう|cost の *負担 が 大きい|おおきい|big 。", "スマホ が 急速|きゅうそく|rapidly に *普及 した。", "新しい|あたらしい|new 顧客|こきゃく|customer を *獲得 する。", "夏|なつ|summer は 冷たい|つめたい|cold 飲み物|のみもの|drink の *需要 が 増える|ふえる|rises 。", "変化|へんか|change に *抵抗 する 人|ひと|people も いる。", "スマホ に *依存 しすぎている。", "データ を 安全|あんぜん|safe に *管理 する。", "*条件 に 合う|あう|fit 人|ひと|person を 探|さが|look_for している。", "毎日|まいにち|every_day の 勉強|べんきょう|study 時間|じかん|time を *記録 している。", "会議|かいぎ|meeting の *資料 を 準備|じゅんび|prepare する。", "友達|ともだち|friend を 誕生日|たんじょうび|birthday パーティー に *招待 した。", "事故|じこ|accident の 原因|げんいん|cause を *調査 している。", "研究|けんきゅう|research の 結果|けっか|result を *発表 する。", "早起き|はやおき|waking_early の *習慣 を つけたい。", "古い|ふるい|old スマホ を 新しい|あたらしい|new もの と *交換 した。", "*努力 すれば 夢|ゆめ|dream は 叶う|かなう|come_true 。", "この 商品|しょうひん|product は 一年間|いちねんかん|one_year *保証 されている。", "宿題|しゅくだい|homework は もう *済んでいる 。", "東京|とうきょう|Tokyo は *物価 が 高い|たかい|high 。", "家|いえ|family が *貧しくて 、 大学|だいがく|university に 行けなかった|いけなかった|couldn't_go 。", "*腹 が 痛い|いたい|painful 。", "先生|せんせい|teacher の *許可 を もらった。", "今月|こんげつ|this_month は *支出 が 多かった|おおかった|were_many 。", "全員|ぜんいん|everyone に 同じ|おなじ|same 機会|きかい|chance が *与えられる 。", "*巨大 な 地震|じしん|earthquake が 起きた|おきた|happened 。", "スポンジ が 水|みず|water を *吸収 する。", "銀行|ぎんこう|bank に *強盗 が 入った|はいった|entered 。", "父|ちち|father は 電気|でんき|electricity *技師 だ。", "それ は *誤解 です。", "*布 で 机|つくえ|desk を ふく。", "*綿 の シャツ を 買った|かった|bought 。"];
 function paintKanji(i) {
   const el = $("kanji"), w = WORDS[i], full = lvl(w.k) === -3;
   el.className = "kanji " + (lvl(w.k) < 0 ? "forgot" : "");
@@ -325,7 +355,7 @@ function paintKanji(i) {
   [...w.k].forEach((c, j) => {
     const s = document.createElement("span");
     s.className = "ch"; s.dataset.c = c; s.textContent = c;
-    const pr = HL[i][j].split("|"), v = pr[0].split(" ").map(Number);
+    const pr = (HL[i][j] || "0 100 0 0").split("|"), v = pr[0].split(" ").map(Number);
     s.style.setProperty("--r", v.map(n => n + "%").join(" "));
     if (pr[1]) s.style.setProperty("--r2", pr[1].split(" ").map(n => n + "%").join(" "));
     host.appendChild(s);
@@ -340,43 +370,59 @@ let cur = -1, revR = false, revM = false, reviewed = 0, tally = {forgot:0, easy:
 const XKEY = "kanjiMemoryExtra.v1", N0 = 11, OLD_N = 31; // OLD_N: words before the later additions (only used for old saves)
 /* deep learning: the first spelling Easy of a word unlocks the next new word and sends that word to deep learning; it comes back after 20-30 other cards, again after 20-30 when right, and goes back to spelling mode when wrong */
 const LEECH = 4;
-let hold = {}, strk = {}, diff = {}, easies = {}, cold = false, unlocked = 0, dlData = {}, spDone = {}, lapses = {}, dl = false, deep = false, syl = false, dlDone = false, dlRes = null, cardSeq = 0, recent = [];
-try { const x = JSON.parse(localStorage.getItem(XKEY)); if (x) { unlocked = Math.max(0, Math.min(WORDS.length - N0, x.unlocked | 0)); reviewed = x.reviewed | 0; dlData = x.dl || {}; if (x.v !== 4) for (const q in dlData) dlData[q] = sched(dlData[q].lv || 0); lapses = x.lp || {}; hold = x.hd || {}; strk = x.sk || {}; diff = x.df || {}; easies = x.ez || {}; spDone = x.sp || {}; for (const q in dlData) spDone[q] = 1; unlocked = Math.max(unlocked, Math.min(OLD_N - N0, Object.keys(spDone).length)); /* old saves only: never lets the newest words in by itself */ tally = Object.assign({forgot:0, easy:0}, x.tally); delete tally.almost; } } catch (e) {}
+const ACTIVE = 4, DLGAP = 30; // ACTIVE: words learned at the same time (working memory holds about 4 chunks, Cowan 2001); DLGAP: at most one blue deep learning card every 30 cards
+let hold = {}, strk = {}, diff = {}, easies = {}, cold = false, unlocked = 0, dlData = {}, spDone = {}, lapses = {}, dl = false, deep = false, syl = false, dlDone = false, dlRes = null, cardSeq = 0, recent = [], act = [];
+try { const x = JSON.parse(localStorage.getItem(XKEY)); if (x) { unlocked = Math.max(0, Math.min(WORDS.length - N0, x.unlocked | 0)); reviewed = x.reviewed | 0; dlData = x.dl || {}; if (x.v !== 4) for (const q in dlData) dlData[q] = sched(dlData[q].lv || 0); lapses = x.lp || {}; hold = x.hd || {}; strk = x.sk || {}; diff = x.df || {}; easies = x.ez || {}; spDone = x.sp || {}; for (const q in dlData) spDone[q] = 1; unlocked = Math.max(unlocked, Math.min(OLD_N - N0, Object.keys(spDone).length)); /* old saves only: never lets the newest words in by itself */ tally = Object.assign({forgot:0, easy:0}, x.tally); delete tally.almost; act = Array.isArray(x.ac) ? x.ac.filter(i => Number.isInteger(i) && i >= 0 && i < WORDS.length) : []; } } catch (e) {}
+for (let i = 0; i < WORDS.length; i++) { const k = WORDS[i].k; if (st(k) >= 3 && !dlData[k]) dlData[k] = sched(0); } // finished words wait for blue deep learning
 
 /* a deep learning word is left out of the normal deck: it only comes back through its deep learning date */
 function waiting(k) { return !!dlData[k] && st(k) >= 2; } // already deep-learned: still shows up as a normal card now and then, but less often
 /* look-alike / sound-alike partners: words that share a kanji, or the first two or the last two kana of the reading (Laufer: words of similar form interfere when they are learned together) */
-const CONF = WORDS.map((a, i) => WORDS.map((_, j) => j).filter(j => j !== i && ([...a.k].some(c => WORDS[j].k.includes(c)) || a.r.slice(0, 2) === WORDS[j].r.slice(0, 2) || a.r.slice(-2) === WORDS[j].r.slice(-2))));
+const CONF = WORDS.map((a, i) => WORDS.map((_, j) => j).filter(j => j !== i && ([...a.k].some(c => /[\u4e00-\u9fff]/.test(c) && WORDS[j].k.includes(c)) || a.r.slice(0, 2) === WORDS[j].r.slice(0, 2) || a.r.slice(-2) === WORDS[j].r.slice(-2))));
 /* NEW-WORD GATE: a new word is unlocked only when every word that is already unlocked has reached stage 2 or higher =
    no red and no hints any more, black mode answered Easy, and the hiragana mode answered Easy as well */
 function allLearned() { for (let i = 0; i < N0 + unlocked; i++) if (st(WORDS[i].k) < 2) return false; return true; }
 function tryUnlock() { if (unlocked < WORDS.length - N0 && allLearned()) { unlocked++; return true; } return false; }
-function pick() {
-  // a new word only comes in when EVERY unlocked word is fully learned (see allLearned); otherwise the known words keep coming
-  if (tryUnlock()) { save(); return N0 + unlocked - 1; }
-  // weighted random, never the same word twice in a row
-  // red words come up more often until they are black again; locked N2 words are left out
-  // a word that was just answered sits out for a while (hold): short while it is being learned, longer and longer once it is known (spacing)
-  const bst = i => { const v = st(WORDS[i].k); return v <= -2 ? 3 : v === -1 ? 2 : 1; };
-  const held = i => (hold[WORDS[i].k] || 0) > reviewed;
-  const last4 = recent.slice(-4);
-  const clash = i => CONF[i].some(j => recent.includes(j) && (st(WORDS[i].k) < 0 || st(WORDS[j].k) < 0)); // a look-alike word was shown a moment ago and one of the two is still red: not now
-  const w0 = i => i === cur || i >= N0 + unlocked ? 0 : Math.max(.08, Math.sqrt(weights[i]) * bst(i) * (1 + .5 * (diff[WORDS[i].k] || 0)) / (1 + .4 * (easies[WORDS[i].k] || 0))) * (waiting(WORDS[i].k) ? .5 : 1); // sqrt keeps a fresh word from hogging the deck; deep-learned words come as normal cards less often
-  const tiers = [i => !last4.includes(i) && !held(i) && !clash(i), i => !last4.includes(i) && !held(i), i => !held(i)];
-  for (const ok of tiers) {
-    const pool = weights.map((_, i) => ok(i) ? w0(i) : 0), t = pool.reduce((a, b) => a + b, 0);
-    if (t > 0) { let x = Math.random() * t; for (let i = 0; i < pool.length; i++) { x -= pool[i]; if (x < 0) return i; } }
+/* the learning set: ACTIVE words at a time. A new word comes in only when a word passed spelling mode and left the set. Words already started come back first, then brand-new ones in list order, skipping ones that look or sound like a word already in the set. */
+function fillActive() {
+  act = act.filter(i => st(WORDS[i].k) < 3);
+  while (act.length < ACTIVE) {
+    let c = -1, best = -9;
+    for (let i = 0; i < WORDS.length; i++) { const k = WORDS[i].k; if (!act.includes(i) && marks[k] !== undefined && st(k) < 3 && st(k) > best) { c = i; best = st(k); } }
+    if (c < 0) {
+      const fresh = []; for (let i = 0; i < WORDS.length; i++) if (!act.includes(i) && marks[WORDS[i].k] === undefined && !dlData[WORDS[i].k]) fresh.push(i);
+      c = fresh.find(i => !CONF[i].some(j => act.includes(j))); if (c === undefined) c = fresh.length ? fresh[0] : -1;
+    }
+    if (c < 0) break;
+    act.push(c);
   }
-  // every word is sitting out: show the one whose hold ends first
-  let b = -1, bh = Infinity;
-  for (let i = 0; i < N0 + unlocked; i++) { if (i === cur) continue; const h = hold[WORDS[i].k] || 0; if (h < bh) { b = i; bh = h; } }
-  return b >= 0 ? b : (cur + 1) % (N0 + unlocked);
+}
+function pick() {
+  fillActive();
+  if (!act.length) { // nothing left to learn: the blue deep learning word whose date comes first
+    let b = -1, bd = Infinity;
+    for (let i = 0; i < WORDS.length; i++) { const x = dlData[WORDS[i].k]; if (x && st(WORDS[i].k) >= 3 && i !== cur && x.due < bd) { b = i; bd = x.due; } }
+    return b >= 0 ? b : Math.max(0, cur);
+  }
+  const bst = i => st(WORDS[i].k) < 0 ? 2 : 1; // red words come a bit more often
+  const held = i => (hold[WORDS[i].k] || 0) > reviewed; // a word that was just answered sits out for a moment
+  const lastN = recent.slice(-Math.max(1, Math.min(2, act.length - 1)));
+  const clash = i => CONF[i].some(j => recent.slice(-4).includes(j) && (st(WORDS[i].k) < 0 || st(WORDS[j].k) < 0)); // look-alike word shown a moment ago while one is still red: not now
+  const w0 = i => Math.max(.08, Math.sqrt(weights[i]) * bst(i) * (1 + .5 * (diff[WORDS[i].k] || 0)) / (1 + .4 * (easies[WORDS[i].k] || 0)));
+  const tiers = [i => !lastN.includes(i) && !held(i) && !clash(i), i => !lastN.includes(i) && !held(i), i => i !== cur && !held(i)];
+  for (const ok of tiers) {
+    const c = act.filter(ok), t = c.reduce((a, i) => a + w0(i), 0);
+    if (t > 0) { let x = Math.random() * t; for (const i of c) { x -= w0(i); if (x < 0) return i; } return c[c.length - 1]; }
+  }
+  let b = -1, bh = Infinity; // everyone is sitting out: the one whose hold ends first
+  for (const i of act) { if (i === cur) continue; const h = hold[WORDS[i].k] || 0; if (h < bh) { b = i; bh = h; } }
+  return b >= 0 ? b : act[0];
 }
 
 function show() {
   cardSeq++;
   try { speechSynthesis.cancel(); } catch (e) {} M.tid = (M.tid || 0) + 1; M.talking = false; // frog stops talking the moment the next word appears
-  const due = dueWord(); cur = due >= 0 ? due : pick(); const kk = WORDS[cur].k; deep = due >= 0; syl = !deep && st(kk) === 3 && !dlData[kk] && (strk[kk] || 0) < 2; cold = !deep && !syl && waiting(kk) && st(kk) >= 3; if (deep) { lastDL = reviewed; const o = [-3,-2,-1,0,1,2,3].filter(v => v !== lastDeepLv); vlv = lastDeepLv = o[Math.random() * o.length | 0]; } else vlv = null; dl = syl || (deep && vlv === 3); // a deep learning card comes in any of the levels, always blue // deep learning only when the word's date has come; otherwise it is a normal card
+  const due = dueWord(); cur = due >= 0 ? due : pick(); const kk = WORDS[cur].k; deep = due >= 0 || st(kk) >= 3; syl = false; cold = false; if (deep) { lastDL = reviewed; const o = [-2,-1,0,1,2,3].filter(v => v !== lastDeepLv); vlv = lastDeepLv = o[Math.random() * o.length | 0]; } else vlv = null; dl = deep && vlv === 3; // a deep learning card comes in any of the levels, always blue // deep learning only when the word's date has come; otherwise it is a normal card
   recent.push(cur); if (recent.length > 8) recent.shift(); revR = revM = false;
   const w = WORDS[cur];
   paintKanji(cur);
@@ -384,8 +430,8 @@ function show() {
     $(id).textContent = "Tap to reveal"; $(id).className = "hint"; $(id).dataset.a = txt;
   }
   $("readingCard").classList.remove("open","right","wrong"); $("meaningCard").classList.remove("open","right","wrong"); $("exText").textContent = "";
-  paintCue(lvl(w.k) < 0 && !deep); // red word: shape hook right under the kanji
-  setupQuiz(); setupDeep(); if (cold && (strk[kk] || 0) % 2 === 0) paintSentence(); // known word: no options, no hints; every other time inside its sentence
+  paintCue(lvl(w.k) === -2 && !deep); // red + help: shape hook right under the kanji (plain red = no help)
+  setupQuiz(); setupDeep(); if (deep && !quiz && !dl && (strk[kk] || 0) % 2 === 0) paintSentence(); // blue deep learning card without options: every other time inside its sentence
   update();
 }
 
@@ -420,25 +466,22 @@ function applyRating(r) {
   tally[r]++; reviewed++;
   if (r === "forgot") {
     delete dlData[k];
-    if (wasDL || wasCold) { lapses[k] = (lapses[k] || 0) + 1; marks[k] = 2; } // wrong in deep learning (or a cold recall of a known word): back to spelling mode
+    if (wasDL || wasCold) { lapses[k] = (lapses[k] || 0) + 1; marks[k] = 2; if (!act.includes(cur)) act.push(cur); } // wrong in deep learning (or a cold recall of a known word): back to spelling mode
   }
-  else if (wasDL) dlData[k] = sched(((dlData[k] || {}).lv || 0) + 1); // right in deep learning: comes back after another 20-30 cards
-  else if (wasSyl) dlData[k] = sched(0); // spelling syllable mode done: deep learning comes after a while
-  else if (wasSpell) {
-    if (!spDone[k]) spDone[k] = 1; // spelling done (new words are decided by tryUnlock in pick)
-  }
+  else if (wasDL) dlData[k] = sched(((dlData[k] || {}).lv || 0) + 1); // right in deep learning: comes back much later
+  else if (marks[k] >= 3) { spDone[k] = 1; dlData[k] = sched(0); act = act.filter(q => q !== cur); } // spelling mode passed: the word leaves the set, a new word can come in, and it only returns as a blue deep learning card
   // sit-out time before the word comes up again: a miss -> soon (but not right away); learning -> short; known -> longer and longer
-  if (r === "forgot") { strk[k] = Math.max(0, (strk[k] || 0) - 2); hold[k] = reviewed + 5 + (Math.random() * 3 | 0); }
+  if (r === "forgot") { strk[k] = Math.max(0, (strk[k] || 0) - 2); hold[k] = reviewed + 3 + (Math.random() * 2 | 0); }
   else if (marks[k] >= 3) { hold[k] = reviewed + [14, 28, 50, 90, 140, 250, 400][Math.min(strk[k] || 0, 6)]; strk[k] = (strk[k] || 0) + 1; }
-  else hold[k] = reviewed + 6 + 2 * Math.min(easies[k] || 0, 5);
+  else hold[k] = reviewed + 2 + Math.min(easies[k] || 0, 3);
   save(); onRated(r);
 }
 $("rate").onclick = e => { const r = e.target.dataset.r; if (!r) return; applyRating(r); show(); };
 
-$("reset").onclick = () => { M.L = 0; try { localStorage.setItem('kanjiFrogLevel', 0); } catch (e) {} marks = {}; weights = WORDS.map(() => 3); unlocked = 0; dlData = {}; spDone = {}; lapses = {}; hold = {}; strk = {}; diff = {}; easies = {}; reviewed = 0; tally = {forgot:0, easy:0}; save(); cur = -1; show(); };
+$("reset").onclick = () => { M.L = 0; try { localStorage.setItem('kanjiFrogLevel', 0); } catch (e) {} marks = {}; weights = WORDS.map(() => 3); unlocked = 0; act = []; dlData = {}; spDone = {}; lapses = {}; hold = {}; strk = {}; diff = {}; easies = {}; reviewed = 0; tally = {forgot:0, easy:0}; save(); cur = -1; show(); };
 
 /* test helper: the first 20 words count as known (level 3, trickling back over the next cards); the rest of the deck is left alone */
-$("t20").onclick = () => { for (let i = 0; i < 20; i++) { const k = WORDS[i].k; marks[k] = 3; weights[i] = 0.4; strk[k] = 2; hold[k] = reviewed + 10 + i * 2; delete lapses[k]; } unlocked = Math.max(unlocked, 20 - N0); save(); cur = -1; show(); };
+$("t20").onclick = () => { for (let i = 0; i < 20; i++) { const k = WORDS[i].k; marks[k] = 3; weights[i] = 0.4; strk[k] = 2; hold[k] = reviewed + 10 + i * 2; dlData[k] = sched(0); delete lapses[k]; } act = act.filter(q => q >= 20); save(); cur = -1; show(); };
 /* realistic spelling mistakes (same order as WORDS): ai/ei mix-ups, missing or extra long vowels, dropped ん/っ, じ/ぢ, look-alike sounds */
 const WRONGS=[['はだん','はんだ','ほんだん','はんたん'],['じょきょう','じょうきょ','じょうきよう','じょうぎょう'],['かいけん','けえけん','けけん','けいげん'],['けいけつ','かいつ','かけつ','かいけっ','かいげつ'],['ええきょう','えいきょ','えきょう','えいきよう','えいぎょう'],['かくに','かくじん','かくいん','かっくにん'],['てきせっ','てっせつ','てきしつ','できせつ'],['いし','いぢ','いち'],['ぼし','ぼおし','ぼうじ','ぼうち'],['さいせえ','さいぜい','さえせい','さいせ'],['みょじ','みようじ','みょうぢ','みょうち','みゅうじ'],
 ['かいせん','かいぜ','かぜん','かいじん'],['ひがく','ひかぐ','ひかっく','ひくか'],['ぞか','ぞうが','ぞおか','そうか'],['ていあ','てあん','ていやん','でいあん'],['ひようか','ひょか','ひょうが','びょうか'],
@@ -452,14 +495,14 @@ const WRONGS=[['はだん','はんだ','ほんだん','はんたん'],['じょ�
 ['じゅうよう','じゆよう','じゅよ','しゅよう'],
 ['でいこう','ていこ','ていこお','ていごう'],
 ['いそん','いぞ','いぞうん','いずん'],
-['かんい','かんりい','がんり','かり'], ["じょけん", "じょうけ", "じょうげん", "ぞうけん"], ["きろ", "きろっく", "ぎろく", "きろくう"], ["しりょ", "しりよう", "じりょう", "しろう"], ["しょたい", "しょうた", "じょうたい", "しょうだい"], ["ちょさ", "ちょうざ", "ちーさ", "ちょさう"], ["はつぴょう", "はっぴょ", "はっひょう", "はっびょう"], ["しゅかん", "しゅうか", "しゅうがん", "しゅーかん"], ["こかん", "こうか", "ごうかん", "こうがん"], ["どりょ", "どりょっく", "どうりょく", "どりょうく"], ["ほしょ", "ほうしょう", "ぼしょう", "ほしょおう"]];
+['かんい','かんりい','がんり','かり'], ["じょけん", "じょうけ", "じょうげん", "ぞうけん"], ["きろ", "きろっく", "ぎろく", "きろくう"], ["しりょ", "しりよう", "じりょう", "しろう"], ["しょたい", "しょうた", "じょうたい", "しょうだい"], ["ちょさ", "ちょうざ", "ちーさ", "ちょさう"], ["はつぴょう", "はっぴょ", "はっひょう", "はっびょう"], ["しゅかん", "しゅうか", "しゅうがん", "しゅーかん"], ["こかん", "こうか", "ごうかん", "こうがん"], ["どりょ", "どりょっく", "どうりょく", "どりょうく"], ["ほしょ", "ほうしょう", "ぼしょう", "ほしょおう"], ["すでいる", "すんている", "ずんでいる", "すんでいく"], ["ぶか", "ぶつか", "ぷっか", "ぶっが"], ["まづしくて", "まずしくで", "まずくて", "まじしくて"], ["ばら", "はあら", "わら", "はる"], ["きよか", "きょが", "ぎょか", "きょかあ"], ["しじゅつ", "しゅつ", "ししゅう", "ししゅっ"], ["あたえれる", "あたられる", "あたえらる", "あだえられる"], ["きよだい", "きょたい", "きょうだい", "ぎょだい"], ["きゅしゅう", "きゅうしゅ", "きゅうじゅう", "きゅうしう"], ["ごとう", "ごうと", "こうとう", "ごうどう"], ["きし", "ぎじ", "ぎち", "ぎしい"], ["ごがい", "こかい", "ごあい", "ごかん"], ["ぬう", "ぬお", "のの", "ぬのう"], ["わだ", "わたあ", "わか", "はた"]];
 function wrongFor(i){const l=WRONGS[i];return l[Math.random()*l.length|0]}
 /* word stages: -2 red + hint, -1 red, 0 black, 1 hiragana mode, 2 spelling mode */
 const HINT=[[1,'だん'],[1,'きょう'],[1,'けん'],[1,'けつ'],[1,'きょう'],[1,'にん'],[1,'せつ'],[1,'じ'],[1,'し'],[1,'せい'],[1,'じ'],[1,'ぜん'],[1,'かく'],[1,'か'],[1,'あん'],[1,'か'],[1,'もく'],[1,'こう'],[1,'げん'],[1,'とう'],[1,'しょう'],
- [1,'しゃく'],[1,'あく'],[1,'けん'],[1,'たん'],[1,'きゅう'],[1,'とく'],[1,'よう'],[1,'こう'],[1,'ぞん'],[1,'り'], [1,"けん"], [1,"ろく"], [1,"りょう"], [1,"たい"], [1,"さ"], [1,"ぴょう"], [1,"かん"], [1,"かん"], [1,"りょく"], [1,"しょう"]];
+ [1,'しゃく'],[1,'あく'],[1,'けん'],[1,'たん'],[1,'きゅう'],[1,'とく'],[1,'よう'],[1,'こう'],[1,'ぞん'],[1,'り'], [1,"けん"], [1,"ろく"], [1,"りょう"], [1,"たい"], [1,"さ"], [1,"ぴょう"], [1,"かん"], [1,"かん"], [1,"りょく"], [1,"しょう"], [1,"んでいる"], [1,"か"], [1,"ずしくて"], [1,"ら"], [1,"か"], [1,"しゅつ"], [1,"えられる"], [1,"だい"], [1,"しゅう"], [1,"とう"], [1,"し"], [1,"かい"], [1,"の"], [1,"た"]];
 /* word stages: -3 red + full hiragana, -2 red + one hiragana, -1 red, 0 black, 1 hiragana mode, 2 spelling mode, 3 spelling syllable mode, then deep learning (blue) after a while */
-function st(k){const m=marks[k];return typeof m==='number'?m:m==='forgot'?-1:m==='easy'?1:-3}
-function nextState(k,r,q){const s=st(k);if(r==='forgot')return s<0?Math.max(-3,s-1):s===0?-1:s-1;return s===-3?-2:s===-2?-1:s===-1?0:s===0?1:s===1?2:3}
+function st(k){const m=marks[k],v=typeof m==='number'?m:m==='forgot'?-1:m==='easy'?1:-2;return Math.max(-2,v)} // -2 red + help, -1 red, 0 black, 1 hiragana mode, 2 spelling mode, 3 finished
+function nextState(k,r,q){const s=st(k);if(r==='forgot')return s<0?-2:s===0?-1:s-1;return s<=-2?-1:s===-1?0:s===0?1:s===1?2:3}
 function wrongSpell(r){
  const B='かきくけこさしすせそたちつてとはひふへほ',V='がぎぐげござじずぜぞだぢづでどばびぶべぼ',
  SIM={'ま':'ほ','な':'た','は':'ほ','ぬ':'め','め':'ぬ','わ':'れ','れ':'わ','ね':'れ','い':'り','り':'い','さ':'ち','こ':'に'},c=[],a=[...r];
@@ -474,21 +517,21 @@ function wrongSpell(r){
 const DECOY=[3,3,7,1,5,7,0,5,9,8,{k:"文字",r:"もじ",m:"letter"},
  {k:"改正",r:"かいせい",m:"revise"},{k:"比例",r:"ひれい",m:"proportion"},{k:"追加",r:"ついか",m:"add"},{k:"提出",r:"ていしゅつ",m:"submit"},{k:"評判",r:"ひょうばん",m:"reputation"},
  {k:"注意",r:"ちゅうい",m:"caution"},{k:"方向",r:"ほうこう",m:"direction"},{k:"現実",r:"げんじつ",m:"reality"},{k:"検査",r:"けんさ",m:"inspection"},{k:"対応",r:"たいおう",m:"respond"},
- 3,{k:"握手",r:"あくしゅ",m:"handshake"},{k:"献立",r:"こんだて",m:"menu"},{k:"担当",r:"たんとう",m:"in charge"},{k:"普通",r:"ふつう",m:"normal"},{k:"獲物",r:"えもの",m:"prey"},{k:"必要",r:"ひつよう",m:"necessary"},{k:"抗議",r:"こうぎ",m:"protest"},{k:"存在",r:"そんざい",m:"existence"},{k:"処理",r:"しょり",m:"processing"}, {k:"事件",r:"じけん",m:"incident"}, {k:"記憶",r:"きおく",m:"memory"}, {k:"材料",r:"ざいりょう",m:"ingredients"}, {k:"紹介",r:"しょうかい",m:"introduction"}, {k:"検査",r:"けんさ",m:"inspection"}, {k:"発達",r:"はったつ",m:"development"}, {k:"慣習",r:"かんしゅう",m:"custom"}, {k:"交代",r:"こうたい",m:"taking turns"}, {k:"協力",r:"きょうりょく",m:"cooperation"}, {k:"保険",r:"ほけん",m:"insurance"}]; // index of the lookalike word, always from the list
+ 3,{k:"握手",r:"あくしゅ",m:"handshake"},{k:"献立",r:"こんだて",m:"menu"},{k:"担当",r:"たんとう",m:"in charge"},{k:"普通",r:"ふつう",m:"normal"},{k:"獲物",r:"えもの",m:"prey"},{k:"必要",r:"ひつよう",m:"necessary"},{k:"抗議",r:"こうぎ",m:"protest"},{k:"存在",r:"そんざい",m:"existence"},{k:"処理",r:"しょり",m:"processing"}, {k:"事件",r:"じけん",m:"incident"}, {k:"記憶",r:"きおく",m:"memory"}, {k:"材料",r:"ざいりょう",m:"ingredients"}, {k:"紹介",r:"しょうかい",m:"introduction"}, {k:"検査",r:"けんさ",m:"inspection"}, {k:"発達",r:"はったつ",m:"development"}, {k:"慣習",r:"かんしゅう",m:"custom"}, {k:"交代",r:"こうたい",m:"taking turns"}, {k:"協力",r:"きょうりょく",m:"cooperation"}, {k:"保険",r:"ほけん",m:"insurance"}, {k:"済ませる",r:"すませる",m:"finish"}, {k:"物質",r:"ぶっしつ",m:"matter"}, {k:"貧乏",r:"びんぼう",m:"poor person"}, {k:"服",r:"ふく",m:"clothes"}, {k:"可能",r:"かのう",m:"possible"}, {k:"輸出",r:"ゆしゅつ",m:"export"}, {k:"与える",r:"あたえる",m:"give"}, {k:"拡大",r:"かくだい",m:"expansion"}, {k:"収入",r:"しゅうにゅう",m:"income"}, {k:"強調",r:"きょうちょう",m:"emphasis"}, {k:"技術",r:"ぎじゅつ",m:"technology"}, {k:"理解",r:"りかい",m:"understanding"}, {k:"市",r:"し",m:"city"}, {k:"絹",r:"きぬ",m:"silk"}]; // index of the lookalike word, always from the list
 const DECOY_OLD=[["決断","けつだん","firm decision"],["状態","じょうたい","condition, state"],["試験","しけん","exam"],["判決","はんけつ","court ruling"],["反響","はんきょう","echo, reaction"],["確信","かくしん","firm belief"],["適応","てきおう","adapting"],["保持","ほじ","holding on to"],["阻止","そし","blocking"],["再会","さいかい","meeting again"],["文字","もじ","letter, character"],["名刺","めいし","business card"]];
 let lastDL=-99,lastDeepLv=9;
 /* next deep learning date = after 20-30 more cards (reviewed counts the cards) */
-function sched(lv){return{lv,due:reviewed+[60,120,250,500][Math.min(lv,3)]+(Math.random()*21|0)}} // 20-30 cards
+function sched(lv){return{lv,due:reviewed+[30,90,200,400][Math.min(lv,3)]+(Math.random()*11|0)}} // first blue card about 30 cards after the word was finished, then later and later
 /* a deep learning word whose time has come is shown next (never two deep cards in a row: at least 7 other cards in between) */
-function dueWord(){if(reviewed-lastDL<25)return -1;let b=-1,bd=Infinity;
- for(let i=0;i<N0+unlocked;i++){const k=WORDS[i].k,x=dlData[k];if(recent.slice(-4).includes(i)||!x||st(k)<2||(strk[k]||0)>=3)continue;if(x.due<=reviewed&&x.due<bd){b=i;bd=x.due}}
+function dueWord(){if(reviewed-lastDL<DLGAP)return -1;let b=-1,bd=Infinity;
+ for(let i=0;i<WORDS.length;i++){const k=WORDS[i].k,x=dlData[k];if(recent.slice(-4).includes(i)||!x||st(k)<3||(strk[k]||0)>=3)continue;if(x.due<=reviewed&&x.due<bd){b=i;bd=x.due}}
  return b}
 /* hard kana in a reading: long vowels (う/い/お), small っ ゃ ゅ ょ, ん, じ ず ぢ づ */
 function spellParts(r){const O='おこそとのほもよろごぞどぼぽょを',U='うくすつぬふむゆるぐずづぶぷゅ',E='えけせてねへめれげぜでべぺ';
  return[...r].map((c,i)=>{const p=r[i-1]||'';let h='っゃゅょんじずぢづ'.includes(c);
   if(!h&&i>0){if(c==='う')h=(O+U).includes(p);else if(c==='い')h=E.includes(p);else if(c==='お')h=O.includes(p)}
   return{c,h}})}
-function paintSentence(){const k=$('kanji'),p=document.createElement('span');k.className='kanji sent';k.textContent='';
+function paintSentence(){const k=$('kanji'),p=document.createElement('span');k.className='kanji sent'+(deep?' deep':'');k.textContent='';
  SENT[cur].split(' ').forEach(t=>{const a=t.split('|');
   if(t[0]==='*'){const b=document.createElement('b');b.textContent=t.slice(1);p.appendChild(b)}
   else if(a.length===3){const s=document.createElement('span'),m=a[2].replace(/_/g,' ');s.className='tw';s.textContent=a[0];s.title=a[1]+'  '+m;
@@ -523,7 +566,7 @@ function flipBox(i){if(quiz.f[i])return;quiz.f[i]=1;const first=!quiz.done;const
 /* ---------- deep learning: pick the syllables, type the meaning ---------- */
 /* extra English answers that are fine too (the shown meaning is always accepted) */
 const ALT={'判断':['judge','judgement','judgment','decision','determine'],'状況':['circumstances','circumstance','state of affairs','condition','status'],'経験':['experiences','experienced'],'解決':['solution','resolve','resolution','settle'],'影響':['effect','impact','affect'],'確認':['confirm','confirmation','verify'],'適切':['suitable','proper','adequate','fitting'],'維持':['maintenance','keep','preserve','sustain'],'防止':['prevention','avoid'],'再生':['playback','replay','regenerate','regeneration'],'苗字':['family name','last name','lastname','name'],
- '改善':['improvement','enhance','better'],'比較':['comparison'],'増加':['increment','rise','grow','growth'],'提案':['proposal','suggest','suggestion'],'評価':['evaluation','assess','assessment','rating','appraise'],'注目':['notice','focus','attract attention'],'傾向':['trend','inclination','tend'],'実現':['realise','realization','realisation','materialize','come true','achieve','fulfill'],'検討':['consideration','examine','examination','review','study'],'対象':['subject','object','audience'], '条件':['terms', 'requirement', 'requirements', 'prerequisite'], '記録':['records', 'recording', 'log', 'note down'], '資料':['material', 'documents', 'document', 'data', 'reference materials'], '招待':['invitation', 'invited', 'invites'], '調査':['investigation', 'survey', 'examine', 'examination', 'research'], '発表':['announcement', 'present', 'presentation', 'publish', 'release'], '習慣':['habits', 'custom', 'routine'], '交換':['swap', 'trade', 'replace', 'exchanging'], '努力':['efforts', 'hard work', 'exertion'], '保証':['guarantees', 'warranty', 'assure', 'ensure']};
+ '改善':['improvement','enhance','better'],'比較':['comparison'],'増加':['increment','rise','grow','growth'],'提案':['proposal','suggest','suggestion'],'評価':['evaluation','assess','assessment','rating','appraise'],'注目':['notice','focus','attract attention'],'傾向':['trend','inclination','tend'],'実現':['realise','realization','realisation','materialize','come true','achieve','fulfill'],'検討':['consideration','examine','examination','review','study'],'対象':['subject','object','audience'], '条件':['terms', 'requirement', 'requirements', 'prerequisite'], '記録':['records', 'recording', 'log', 'note down'], '資料':['material', 'documents', 'document', 'data', 'reference materials'], '招待':['invitation', 'invited', 'invites'], '調査':['investigation', 'survey', 'examine', 'examination', 'research'], '発表':['announcement', 'present', 'presentation', 'publish', 'release'], '習慣':['habits', 'custom', 'routine'], '交換':['swap', 'trade', 'replace', 'exchanging'], '努力':['efforts', 'hard work', 'exertion'], '保証':['guarantees', 'warranty', 'assure', 'ensure'], '済んでいる':['finished', 'done', 'be done', 'completed', 'settled', 'over', 'is finished'], '物価':['price', 'prices', 'commodity prices', 'price level', 'cost of living'], '貧しくて':['poor', 'poverty', 'poorly', 'impoverished', 'be poor'], '腹':['stomach', 'belly', 'abdomen', 'tummy'], '許可':['permit', 'permitted', 'approval', 'allow', 'authorization', 'authorisation'], '支出':['expense', 'expenditure', 'spending', 'outlay'], '与えられる':['given', 'is given', 'be granted', 'be provided', 'be awarded'], '巨大':['giant', 'gigantic', 'enormous', 'immense', 'massive'], '吸収':['absorption', 'soak up', 'take in', 'assimilate'], '強盗':['robbery', 'burglar', 'burglary', 'mugger', 'mugging', 'thief'], '技師':['technician', 'engineers'], '誤解':['misunderstand', 'misconception', 'misapprehension'], '布':['fabric', 'textile', 'linen'], '綿':['cotton wool']};
 const normE=t=>t.toLowerCase().replace(/\(.*?\)/g,' ').replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim().replace(/^(to|a|an|the) /,'');
 function lev(a,b){const d=Array.from({length:a.length+1},(_,i)=>[i]);for(let j=1;j<=b.length;j++)d[0][j]=j;for(let i=1;i<=a.length;i++)for(let j=1;j<=b.length;j++)d[i][j]=Math.min(d[i-1][j]+1,d[i][j-1]+1,d[i-1][j-1]+(a[i-1]===b[j-1]?0:1));return d[a.length][b.length]}
 function meaningOk(w,v){const x=normE(v);if(!x)return false;
@@ -550,7 +593,7 @@ function chipDecoys(units,n){const have=new Set(units),c=[];
 /* deep learning meaning: 3 choices, the right one and 2 similar-looking wrong ones */
 const MCWRONG={'判断':['divide','decline'],'状況':['station','citation'],'経験':['experiment','expertise'],'解決':['save','serve'],'影響':['inflation','inference'],'確認':['chase','cheat'],'適切':['appreciate','approximate'],'維持':['contain','remain'],'防止':['present','prevail'],'再生':['pause (a video)','post (a video)'],'苗字':['nickname','surprise'],
  '改善':['impose','approve'],'比較':['compete','compose'],'増加':['decrease','incline'],'提案':['purpose','oppose'],'評価':['elevate','evacuate'],'注目':['intention','extension'],'傾向':['tenderness','tension'],'実現':['release','relate'],'検討':['consume','console'],'対象':['tariff','market'],
- '解釈':['introduce','interrupt'],'把握':['gasp','graze'],'貢献':['distribute','contrast'],'負担':['border','bargain'],'普及':['sprint','sprout'],'獲得':['inquire','require'],'需要':['remand','command'],'抵抗':['resign','persist'],'依存':['defend','descend'],'管理':['massage','manner'], '条件':['convention', 'contention'], '記録':['reward', 'recall'], '資料':['memorials', 'mysteries'], '招待':['invent', 'invest'], '調査':['investment', 'interrupt'], '発表':['pronounce', 'denounce'], '習慣':['habitat', 'rabbit'], '交換':['expense', 'excerpt'], '努力':['comfort', 'export'], '保証':['guardian', 'guidance']};
+ '解釈':['introduce','interrupt'],'把握':['gasp','graze'],'貢献':['distribute','contrast'],'負担':['border','bargain'],'普及':['sprint','sprout'],'獲得':['inquire','require'],'需要':['remand','command'],'抵抗':['resign','persist'],'依存':['defend','descend'],'管理':['massage','manner'], '条件':['convention', 'contention'], '記録':['reward', 'recall'], '資料':['memorials', 'mysteries'], '招待':['invent', 'invest'], '調査':['investment', 'interrupt'], '発表':['pronounce', 'denounce'], '習慣':['habitat', 'rabbit'], '交換':['expense', 'excerpt'], '努力':['comfort', 'export'], '保証':['guardian', 'guidance'], '済んでいる':['be furnished', 'be famished'], '物価':['prizes', 'praises'], '貧しくて':['pour', 'pure'], '腹':['bully', 'bellow'], '許可':['persuasion', 'perspective'], '支出':['expanses', 'expertise'], '与えられる':['be driven', 'be forgiven'], '巨大':['hug', 'hunch'], '吸収':['absolve', 'abstain'], '強盗':['rubber', 'robin'], '技師':['engine', 'engrave'], '誤解':['misdemeanor', 'mismanagement'], '布':['clock', 'clove'], '綿':['cutting', 'cottage']};
 let dlOpts=[],dlPick=-1;
 function drawOpts(){const box=$('dlM');box.textContent='';
  dlOpts.forEach((o,i)=>{const b=document.createElement('button');b.className='chip mcb'+(i===dlPick?' sel':'');b.textContent=o.t;b.onclick=()=>{if(!dl||dlDone)return;dlPick=i;snd('tick');drawOpts()};box.appendChild(b)})}
